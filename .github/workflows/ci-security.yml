@@ -9,37 +9,61 @@ on:
 jobs:
   build-test-scan:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [18]
 
     steps:
-      - name: Checkout repo
+      # -------- Checkout code --------
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
+      # -------- Setup Node.js --------
+      - name: Set up Node.js ${{ matrix.node-version }}
         uses: actions/setup-node@v4
         with:
-          node-version: 18
+          node-version: ${{ matrix.node-version }}
 
+      # -------- Cache node modules --------
+      - name: Cache npm
+        uses: actions/cache@v3
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-node-${{ matrix.node-version }}-${{ hashFiles('package-lock.json') }}
+
+      # -------- Install system dependencies for Cypress --------
+      - name: Install Cypress dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgconf-2-4 libgtk2.0-0 libgtk-3-0 libnotify-dev \
+          libgdk-pixbuf2.0-0 libnss3 libxss1 libasound2 xvfb
+
+      # -------- Install project dependencies --------
       - name: Install dependencies
-        run: npm install
+        run: npm ci
 
+      # -------- Build project --------
       - name: Build project
         run: npm run build || echo "No build script found"
 
+      # -------- SAST 1: Semgrep --------
       - name: Run Semgrep
         uses: returntocorp/semgrep-action@v1
         with:
           config: p/ci
         continue-on-error: true
 
+      # -------- SAST 2: CodeQL --------
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v3
         with:
           languages: javascript
-
-      - name: Run CodeQL Analysis
+      - name: Analyze with CodeQL
         uses: github/codeql-action/analyze@v3
 
-      - name: Run Trivy scan
+      # -------- SCA: Trivy --------
+      - name: Run Trivy vulnerability scanner
         uses: aquasecurity/trivy-action@master
         with:
           scan-type: fs
@@ -49,9 +73,16 @@ jobs:
           output: trivy-report.txt
         continue-on-error: true
 
-      # Временно закомментировали upload-artifact, чтобы workflow точно прошёл
-      # - name: Upload Trivy report
+      # -------- Export artifacts --------
+      - name: Upload Trivy report
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-report
+          path: trivy-report.txt
+
+      # Optional: Upload Semgrep & CodeQL logs (если нужно)
+      # - name: Upload Semgrep report
       #   uses: actions/upload-artifact@v4
       #   with:
-      #     name: trivy-report
-      #     path: trivy-report.txt
+      #     name: semgrep-report
+      #     path: semgrep-report.json
